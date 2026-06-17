@@ -77,6 +77,7 @@ class TestGenerator:
 
 class TestStore:
     def setup_method(self):
+        self._original_sqlite_path = os.environ.get("SQLITE_PATH")
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.tmp.close()
         os.environ["SQLITE_PATH"] = self.tmp.name
@@ -88,6 +89,17 @@ class TestStore:
 
     def teardown_method(self):
         os.unlink(self.tmp.name)
+        # Restore SQLITE_PATH (or remove it) and reload data.store so it
+        # points back at the real DB — otherwise later test modules
+        # (e.g. test_phase3.py's TestSensorMCP) would inherit this
+        # deleted temp file path and fail with "no such table".
+        if self._original_sqlite_path is None:
+            os.environ.pop("SQLITE_PATH", None)
+        else:
+            os.environ["SQLITE_PATH"] = self._original_sqlite_path
+        import importlib
+        import data.store as store_mod
+        importlib.reload(store_mod)
 
     def _seed(self, days=5):
         from data.generate_sensor_data import generate
@@ -143,6 +155,7 @@ class TestStore:
 
 class TestReader:
     def setup_method(self):
+        self._original_sqlite_path = os.environ.get("SQLITE_PATH")
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.tmp.close()
         os.environ["SQLITE_PATH"] = self.tmp.name
@@ -156,6 +169,13 @@ class TestReader:
 
     def teardown_method(self):
         os.unlink(self.tmp.name)
+        if self._original_sqlite_path is None:
+            os.environ.pop("SQLITE_PATH", None)
+        else:
+            os.environ["SQLITE_PATH"] = self._original_sqlite_path
+        import importlib
+        import data.store as store_mod
+        importlib.reload(store_mod)
 
     def _window(self, mid="PUMP-01", n=50):
         import importlib

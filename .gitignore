@@ -18,6 +18,10 @@ data/sensors.db-wal
 data/sensors.db-shm
 data/*.csv
 
+# MCP server generated databases (mock CMMS/inventory/scheduling state + alert log)
+mcp_servers/*.db
+mcp_servers/alerts.log
+
 # Trained model weights (large binary — see README for whether to keep these)
 # Comment the next two lines out if you DO want to commit the trained model
 # models/saved/*.pt

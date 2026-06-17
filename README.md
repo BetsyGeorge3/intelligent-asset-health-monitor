@@ -95,10 +95,82 @@ Database ready at data/sensors.db
 |---|---|---|
 | 1 | Data foundation | ✅ |
 | 2 | BiLSTM anomaly model | ✅ |
-| 3 | MCP servers (5× FastAPI) | 🔜 |
+| 3 | MCP servers (5× FastAPI) | ✅ |
 | 4 | Agentic AI core (ReAct + Claude) | 🔜 |
 | 5 | Streamlit dashboard | 🔜 |
 | 6 | AWS deployment | 🔜 |
+
+---
+
+## Phase 3 — MCP servers
+
+Five small FastAPI services, each exposing one capability the agent can call as a tool — together they form the MCP layer the agent operates over.
+
+```bash
+# Run all 5 servers at once (recommended for local dev)
+python mcp_servers/run_all.py
+
+# Or run one at a time, in separate terminals
+uvicorn mcp_servers.sensor_mcp:app     --port 8001 --reload
+uvicorn mcp_servers.cmms_mcp:app       --port 8002 --reload
+uvicorn mcp_servers.inventory_mcp:app  --port 8003 --reload
+uvicorn mcp_servers.scheduling_mcp:app --port 8004 --reload
+uvicorn mcp_servers.notify_mcp:app     --port 8005 --reload
+
+# Run tests
+pytest tests/test_phase3.py -v
+```
+
+**Note:** `sensor-mcp` imports PyTorch and loads the trained BiLSTM, so
+it takes a few seconds longer to come up than the other four servers.
+If you hit it immediately after starting `run_all.py`, give it ~5-8
+seconds.
+
+Once running, every server has interactive Swagger docs at
+`http://localhost:<port>/docs` — useful for manually poking endpoints
+before wiring the agent to them in Phase 4.
+
+### The five servers
+
+| Server | Port | Wraps / mocks | Key endpoints |
+|---|---|---|---|
+| `sensor-mcp` | 8001 | `reader.py` + `inference.py` (real BiLSTM) | `GET /anomaly_score/{machine_id}`, `GET /readings/{machine_id}` |
+| `cmms-mcp` | 8002 | SAP PM / Maximo (mock) | `POST /work_orders`, `PATCH /work_orders/{id}/status` |
+| `inventory-mcp` | 8003 | Spare parts stock system (mock) | `GET /parts/{part_name}`, `POST /parts/order` |
+| `scheduling-mcp` | 8004 | Crew dispatch system (mock) | `GET /technicians/available`, `POST /dispatch` |
+| `notify-mcp` | 8005 | Twilio/SendGrid/Slack (mock) | `POST /alert`, `GET /alerts` |
+
+### Design decisions worth knowing for interviews
+
+**`sensor-mcp` is the only server with real logic behind it** — the
+other four are deliberately built as realistic mocks (SQLite-backed,
+proper status codes, proper validation) so the *agent integration
+pattern* can be fully demonstrated without needing live SAP/Maximo/
+Twilio credentials. Swapping any mock for the real system only
+requires rewriting that one server's internals — the agent-facing
+HTTP contract doesn't change.
+
+**Specialty-aware technician matching.** `scheduling-mcp`'s
+`/technicians/available` endpoint ranks technicians whose specialty
+exactly matches the fault type first, falling back to general-purpose
+technicians — so the agent doesn't just dispatch "whoever's free."
+
+**Stock validation before commitment.** `inventory-mcp` returns a 409
+(not a silent failure) if the agent tries to order more of a part than
+exists in stock — this is intentional: it forces the agent to reason
+about an alternative (smaller order, different part, escalate) rather
+than the tool quietly lying about what happened.
+
+**Consistent error handling.** Every server returns proper HTTP status
+codes (404 for missing resources, 409 for conflicts) with a `detail`
+message — this matters because in Phase 4 the agent will see these
+errors as tool outputs and needs to reason about them, not just see a
+generic failure.
+
+**Lifespan-based startup.** Each server seeds its own SQLite database
+on startup using FastAPI's `lifespan` context manager (not the
+deprecated `on_event("startup")`), so a fresh clone of the repo "just
+works" the first time any server boots.
 
 ---
 
