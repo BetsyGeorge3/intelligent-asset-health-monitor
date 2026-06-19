@@ -22,6 +22,9 @@ data/*.csv
 mcp_servers/*.db
 mcp_servers/alerts.log
 
+# Agent run traces (generated output, not source)
+agent/traces/
+
 # Trained model weights (large binary — see README for whether to keep these)
 # Comment the next two lines out if you DO want to commit the trained model
 # models/saved/*.pt

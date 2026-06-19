@@ -96,9 +96,109 @@ Database ready at data/sensors.db
 | 1 | Data foundation | ✅ |
 | 2 | BiLSTM anomaly model | ✅ |
 | 3 | MCP servers (5× FastAPI) | ✅ |
-| 4 | Agentic AI core (ReAct + Claude) | 🔜 |
+| 4 | Agentic AI core (ReAct + Claude) | ✅ |
 | 5 | Streamlit dashboard | 🔜 |
 | 6 | AWS deployment | 🔜 |
+
+---
+
+## Phase 4 — Agentic AI core
+
+A LangChain agent powered by Claude that reasons over the 10 tools
+exposed by the 5 MCP servers from Phase 3 — checking machine health,
+deciding whether action is warranted, and if so, creating work orders,
+checking parts stock, dispatching technicians, and sending alerts,
+all autonomously.
+
+```bash
+# 1. Make sure ANTHROPIC_API_KEY is set in .env
+cp .env.example .env   # then edit it
+
+# 2. Start the 5 MCP servers (separate terminal, or background it)
+python mcp_servers/run_all.py
+
+# 3. Run the agent for a single machine
+python agent/react_agent.py PUMP-01
+
+# 4. Or run it across all machines and save traces to disk
+python agent/run_all_machines.py
+
+# Run tests (the 13 pure-logic tests run with no setup; the 10 tool
+# tests additionally require the MCP servers from step 2 to be running)
+pytest tests/test_phase4.py -v
+```
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `agent/tools.py` | 10 LangChain tools, each making a real HTTP call to one of the 5 MCP servers |
+| `agent/prompts.py` | System prompt defining the agent's role and decision policy |
+| `agent/react_agent.py` | Builds the Claude-powered agent and runs it end-to-end for one machine |
+| `agent/trace.py` | Structured `AgentRunTrace` — the step-by-step reasoning record |
+| `agent/run_all_machines.py` | CLI convenience script — runs the agent across every machine, saves JSON traces |
+
+### How it works
+
+```
+HumanMessage("Assess PUMP-01")
+        │
+        ▼
+   Claude reasons ──► calls get_anomaly_score("PUMP-01")
+        │                       │
+        │              sensor-mcp runs the real BiLSTM
+        │                       │
+        ▼                       ▼
+   Claude reasons ──► decides severity = "warning"
+        │
+        ▼
+   Claude reasons ──► calls get_sensor_readings, check_part_stock,
+        │             find_available_technician, create_work_order,
+        │             send_alert — in whatever order it judges sensible
+        ▼
+   Final summary (no more tool calls) ──► returned to the human
+```
+
+Every tool call and result along the way is captured in an
+`AgentRunTrace` — this is the project's centerpiece: a human supervisor
+can audit exactly *why* the agent made each decision, not just see the
+final outcome.
+
+### Design decisions worth knowing for interviews
+
+**Tools talk HTTP, never Python imports.** `agent/tools.py` never
+imports `sensor_mcp.py` or any other server module directly — every
+tool is a plain `httpx` call to `http://localhost:800X`. This is what
+makes the MCP pattern real rather than cosmetic: swapping a mock MCP
+server for a real SAP PM or Twilio integration requires zero changes
+on the agent side.
+
+**Errors are data, not exceptions.** When a tool call 404s or 409s,
+`tools.py` catches it and returns `{"error": True, "status_code": ...,
+"detail": ...}` instead of raising. This matters because the agent
+needs to *see* failures as part of its reasoning (e.g. "insufficient
+stock, I'll flag this rather than dispatch") — an uncaught exception
+would just crash the run with no useful signal.
+
+**System prompt encodes a real decision policy, not just persona.**
+The prompt in `prompts.py` doesn't just say "you are a maintenance
+engineer" — it specifies exactly when to escalate (normal vs. warning
+vs. critical), to check for existing work orders before creating
+duplicates, and to always send a summary alert even when no action is
+taken. This is what keeps the agent's behavior predictable and
+auditable rather than improvised.
+
+**Built on `create_agent` (LangChain 1.x), not the deprecated
+`AgentExecutor`.** The agent loop (reason → tool call → reason → ...
+→ final answer) is handled by LangChain's modern API, which returns a
+clean list of messages that `react_agent.py` walks through to
+reconstruct the full tool-call sequence for the trace.
+
+**The trace, not just the final answer, is the deliverable.**
+`AgentRunTrace` captures every `(tool_name, input, output)` triple in
+order. This is exactly what Phase 5's dashboard will render — a human
+supervisor sees the agent's full chain of reasoning, which is the
+difference between "trust me" and genuine auditability.
 
 ---
 
