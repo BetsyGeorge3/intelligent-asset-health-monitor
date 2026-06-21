@@ -97,8 +97,92 @@ Database ready at data/sensors.db
 | 2 | BiLSTM anomaly model | ✅ |
 | 3 | MCP servers (5× FastAPI) | ✅ |
 | 4 | Agentic AI core (ReAct + Claude) | ✅ |
-| 5 | Streamlit dashboard | 🔜 |
+| 5 | Streamlit dashboard | ✅ |
 | 6 | AWS deployment | 🔜 |
+
+---
+
+## Phase 5 — Streamlit dashboard
+
+A single-page dashboard, five tabs, that ties every previous phase
+together into something a non-technical stakeholder (or an interviewer)
+can actually click through.
+
+```bash
+# Recommended order:
+python setup_phase1.py            # if not already done
+python models/train.py            # if not already done
+python mcp_servers/run_all.py &   # background, or separate terminal
+
+streamlit run dashboard/app.py
+```
+
+Then open the URL Streamlit prints (typically `http://localhost:8501`).
+
+**First-run note:** Streamlit may ask an email/telemetry question on
+its very first launch on a machine. If running it non-interactively
+(e.g. piping output, CI, or certain remote shells) this prompt can
+hang waiting for input — pre-empt it with:
+```bash
+mkdir -p ~/.streamlit
+cat > ~/.streamlit/config.toml << 'EOF'
+[server]
+headless = true
+[browser]
+gatherUsageStats = false
+EOF
+```
+
+### The five tabs
+
+| Tab | Shows | Works without MCP servers? |
+|---|---|---|
+| 📊 Overview | Per-machine health cards: severity, anomaly score, latest sensor values | Partial — sensor values yes, anomaly score needs sensor-mcp |
+| 📈 Sensor data | Time-series charts per sensor, with anomalous readings highlighted | Yes — reads `data/sensors.db` directly |
+| 🧠 Agent trace | Step-by-step tool calls from saved agent runs — the auditability centerpiece | Yes — reads saved JSON traces |
+| 📋 Action log | Work orders, parts/inventory, technician dispatches, alert history | Yes — reads each MCP server's SQLite DB directly |
+| ▶ Run agent | Manually trigger a live agent run for any machine | No — needs all 5 MCP servers + `ANTHROPIC_API_KEY` |
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `dashboard/app.py` | All UI/layout — five `render_*` functions, one per tab |
+| `dashboard/data_access.py` | Every data read the dashboard needs, fully decoupled from layout |
+
+### Design decisions worth knowing for interviews
+
+**Degrades gracefully at every layer, never crashes.** Every function
+in `data_access.py` returns an empty-but-correctly-columned DataFrame
+(or a clear `{"error": ...}` dict) when its data source isn't available
+yet — a fresh clone with no servers running and no data generated still
+opens the dashboard cleanly, just showing "no data yet" messages instead
+of stack traces. This was verified directly with Streamlit's `AppTest`
+harness in both the empty-state and populated-state cases.
+
+**Reads the MCP servers' SQLite files directly for display, but calls
+the live HTTP API for actions.** `get_work_orders()`, `get_parts()`,
+etc. read `cmms.db` / `inventory.db` / `scheduling.db` directly —
+there's no reason to round-trip through HTTP just to display read-only
+historical data. But the "Run agent" tab and the anomaly score on the
+Overview tab go through the real HTTP API, because those represent
+*actions* (or live model inference) the dashboard doesn't own.
+
+**Caught a real bug via proper testing, not just manual clicking.**
+`render_sensor_charts()` originally passed `fault_mask.any()` — a
+`numpy.bool_` — directly into Plotly's `showlegend` property, which
+newer Plotly versions reject outright (`numpy.bool_` isn't accepted
+where a plain Python `bool` is expected). This only surfaces when the
+function actually *executes* with real fault data present, which is
+exactly what running the app through `streamlit.testing.v1.AppTest`
+in the test suite catches and a simple `python -c "import app"` would
+not. Fixed with an explicit `bool(...)` cast.
+
+**The trace viewer is the differentiator.** Most "AI dashboard" demos
+just show a final answer. The Agent trace tab renders every tool call
+the agent made — input, output, and timestamp — in an expandable list.
+This is what turns "the agent said it's fine" into "here's exactly
+how the agent reached that conclusion, and a human can verify each step."
 
 ---
 

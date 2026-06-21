@@ -25,6 +25,9 @@ mcp_servers/alerts.log
 # Agent run traces (generated output, not source)
 agent/traces/
 
+# Streamlit local config (telemetry/headless settings — machine-specific)
+.streamlit/
+
 # Trained model weights (large binary — see README for whether to keep these)
 # Comment the next two lines out if you DO want to commit the trained model
 # models/saved/*.pt
