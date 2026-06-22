@@ -1,0 +1,19 @@
+{
+  "_comment": "Reference definition of the EventBridge rule that triggers the orchestrator Lambda on a schedule. This is provided as documentation of the exact rule shape — aws/eventbridge/deploy.py creates this via boto3 rather than requiring a separate CloudFormation/Terraform deploy, but the rate expression and target shape here are what that script creates.",
+
+  "Name": "asset-health-scheduled-assessment",
+  "Description": "Triggers the agent orchestrator Lambda to assess all machines on a fixed interval",
+  "ScheduleExpression": "rate(15 minutes)",
+  "State": "ENABLED",
+
+  "_comment_schedule": "rate(15 minutes) matches the original Phase 6 roadmap's 'every 15 minutes per machine' goal. Adjust based on real sensor sampling rate — for the 5-minute sampling interval used in data/generate_sensor_data.py, every 15 minutes means the agent sees 3 fresh readings per run, which is enough to detect a developing fault without invoking the agent (and spending Claude API tokens) on every single new data point.",
+
+  "Targets": [
+    {
+      "Id": "asset-health-orchestrator",
+      "Arn": "arn:aws:lambda:REGION:ACCOUNT_ID:function:asset-health-orchestrator"
+    }
+  ],
+
+  "_comment_target": "The Arn above is a placeholder — deploy.py fills in the real function ARN after creating the orchestrator Lambda (aws/eventbridge/orchestrator deploy step), then adds the matching Lambda resource-based policy granting EventBridge permission to invoke it (lambda:AddPermission with Principal=events.amazonaws.com)."
+}

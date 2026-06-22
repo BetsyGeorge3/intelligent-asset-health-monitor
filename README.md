@@ -98,7 +98,136 @@ Database ready at data/sensors.db
 | 3 | MCP servers (5× FastAPI) | ✅ |
 | 4 | Agentic AI core (ReAct + Claude) | ✅ |
 | 5 | Streamlit dashboard | ✅ |
-| 6 | AWS deployment | 🔜 |
+| 6 | AWS deployment | ✅ |
+
+---
+
+## Phase 6 — AWS deployment
+
+Three deployment targets, matching how the 5 MCP servers + the agent
+naturally split by resource needs:
+
+| Component | Deploys to | Why |
+|---|---|---|
+| sensor-mcp (real BiLSTM, needs torch) | Docker / ECS / EC2 | Too heavy for Lambda; SageMaker handles the model itself |
+| BiLSTM model | SageMaker endpoint | Real-time inference, scales independently of the HTTP layer |
+| cmms / inventory / scheduling / notify-mcp | Docker locally, or Lambda + Function URLs | Lightweight, stateless-ish, perfect Lambda fit |
+| Agent orchestrator | Lambda, triggered by EventBridge | Runs the full agent on a schedule with zero human involvement |
+| Dashboard | Docker locally, or Streamlit Community Cloud / EC2 | Needs to reach all 5 MCP servers + read their SQLite state |
+
+### Local Docker (recommended first step — verifies everything before touching AWS)
+
+```bash
+docker compose up --build
+```
+
+This builds and runs all 5 MCP servers as containers — `sensor-mcp`
+from `docker/Dockerfile.sensor` (includes the trained model + torch),
+the other 4 sharing `docker/Dockerfile.lightweight` (parameterized by
+the `MCP_SERVER_MODULE` env var per service). Each lightweight
+service's SQLite state persists in a named Docker volume mounted at
+`/app/data` — **not** at `/app/mcp_servers`, since mounting a volume
+directly over the application code directory would hide the code
+copied there at build time (this was a real bug caught and fixed
+during development — see the design notes below).
+
+### SageMaker (the model)
+
+```bash
+python aws/sagemaker/package_model.py   # builds aws/sagemaker/model.tar.gz
+python aws/sagemaker/deploy.py --bucket your-bucket --role-arn arn:aws:iam::...:role/SageMakerExecutionRole
+```
+
+`aws/sagemaker/inference.py` implements SageMaker's four required entry
+points (`model_fn`, `input_fn`, `predict_fn`, `output_fn`) around the
+exact same `BiLSTMAnomalyDetector` + `Normalizer` from Phase 2 — no
+model logic is duplicated. Once deployed, `models/inference.py`'s new
+`get_anomaly_score_remote()` calls the endpoint instead of local
+weights, while `get_anomaly_score()` (used everywhere else in the
+project) remains completely unchanged and local-only by default.
+
+### Lambda (the 4 lightweight MCP servers)
+
+```bash
+pip install --platform manylinux2014_x86_64 --target aws/lambda/_build \
+    --only-binary=:all: -r aws/lambda/requirements.txt
+python aws/lambda/package.py            # builds aws/lambda/package.zip
+python aws/lambda/deploy.py --role-arn arn:aws:iam::...:role/LambdaExecutionRole
+```
+
+`aws/lambda/handler.py` wraps each FastAPI app with
+[Mangum](https://github.com/jordaneremieff/mangum), so the exact same
+`mcp_servers/*.py` code runs unmodified under both uvicorn (local) and
+Lambda. `sensor-mcp` deliberately stays off Lambda — torch + the model
+weights make it a poor fit for Lambda's package size and cold-start
+characteristics; it runs via Docker/ECS instead.
+
+### EventBridge (the autonomous schedule)
+
+```bash
+python aws/eventbridge/deploy.py \
+    --role-arn arn:aws:iam::...:role/LambdaExecutionRole \
+    --trace-bucket your-trace-bucket \
+    --anthropic-api-key sk-ant-...
+```
+
+Deploys an orchestrator Lambda (`aws/eventbridge/scheduler_handler.py`)
+that EventBridge invokes every 15 minutes with zero human involvement —
+it assesses every machine via the real agent and writes each trace to
+S3. This is the project's "fully autonomous" deployment shape: once
+live, machines get checked on a fixed schedule with no one clicking
+"Run agent" in the dashboard.
+
+### Dashboard
+
+For a portfolio deployment, [Streamlit Community Cloud](https://streamlit.io/cloud)
+is the simplest option (free, point it at the GitHub repo, set
+`ANTHROPIC_API_KEY` and the 5 MCP server URLs as secrets). For a fully
+self-contained AWS deployment, run it via Docker on EC2 behind nginx,
+pointed at the Lambda Function URLs / SageMaker endpoint from above.
+
+### Design decisions worth knowing for interviews
+
+**Caught three real deployment bugs through actual testing, not just
+code review.** A bare `*.db` pattern in `.dockerignore` would have
+silently excluded `data/sensors.db` from the Docker build context —
+verified with a script that replays `.dockerignore`'s glob patterns
+against real file paths, not by eyeballing it. Neither Dockerfile
+installed `httpx`, which every `docker-compose.yml` healthcheck
+imports — every container would have reported unhealthy despite
+working perfectly. And mounting a named volume directly at
+`/app/mcp_servers` would have hidden the application code copied there
+at build time — fixed by making each server's DB/log path configurable
+via an environment variable (`CMMS_DB_PATH`, etc.), defaulting to the
+exact original local-dev behavior when unset, verified against the
+full Phase 1-5 test suite to confirm zero regressions.
+
+**Verified Lambda packaging by actually extracting the zip and running
+it** — not just inspecting file lists. `aws/lambda/handler.py`'s
+`lifespan="off"` setting (correct for Lambda's stateless invocation
+model) means FastAPI's lifespan context manager — which normally calls
+each server's `init_db()` — never fires; the very first request would
+have crashed with `no such table: work_orders`. Fixed by calling
+`init_db()` explicitly once per cold start, then proved it by invoking
+a real `POST /work_orders` through the Lambda handler and confirming
+the table existed.
+
+**The orchestrator Lambda only bundles what it actually imports** —
+verified empirically by tracking `sys.modules` before and after the
+real import chain (`data.store.get_all_machine_ids` +
+`agent.react_agent.run_agent`), rather than assuming from reading
+import statements. This caught that `models/` and `mcp_servers/` were
+being bundled unnecessarily (the orchestrator talks to sensor-mcp over
+HTTP, exactly like `agent/tools.py` always has), cutting the package in
+half.
+
+**SageMaker's inference code never duplicates model logic.**
+`aws/sagemaker/inference.py`'s four entry points are a thin
+SageMaker-shaped wrapper around the identical `BiLSTMAnomalyDetector`
+and `Normalizer` classes from Phase 2 — the same model that's unit
+tested in `tests/test_phase2.py` is what runs in the SageMaker
+container, verified by actually packaging it, extracting the tarball,
+and running inference against it exactly as the real container would.
 
 ---
 

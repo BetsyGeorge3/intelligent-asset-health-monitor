@@ -1,0 +1,16 @@
+# Dependencies for the 4 lightweight MCP servers (cmms, inventory,
+# scheduling, notify) when deployed as Lambda functions.
+#
+# Deliberately a SEPARATE, smaller file from the project's main
+# requirements.txt — Lambda's package size limits reward keeping this
+# as lean as possible, and these 4 servers never need torch/pandas/
+# numpy (that's sensor-mcp only, which doesn't deploy to Lambda — see
+# handler.py's module docstring).
+#
+# Install into aws/lambda/_build/ before running package.py:
+#   pip install --platform manylinux2014_x86_64 --target aws/lambda/_build \
+#       --only-binary=:all: -r aws/lambda/requirements.txt
+
+fastapi>=0.111.0
+mangum>=0.17.0
+pydantic>=2.7.0

@@ -1,0 +1,50 @@
+# Dockerfile for sensor-mcp specifically.
+#
+# Separate from the lightweight image because this server needs torch
+# (for the BiLSTM), pandas, and numpy, plus the trained model weights —
+# meaningfully heavier (~1-2GB vs ~150MB), so bundling it with the other
+# 4 servers would bloat every deployment unnecessarily.
+#
+# Build (from project root):
+#   docker build -f docker/Dockerfile.sensor -t asset-health/sensor-mcp .
+#
+# Run:
+#   docker run -p 8001:8000 asset-health/sensor-mcp
+#
+# IMPORTANT: this image embeds data/sensors.db and models/saved/ as they
+# exist at build time. In production, sensor data should come from a
+# real time-series source (see the InfluxDB note in README) rather than
+# a baked-in SQLite snapshot — this matches Phase 1's USE_SQLITE flag,
+# swap data/store.py's backend without changing this Dockerfile.
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# System libs torch's CPU wheel needs at runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# CPU-only torch wheel — much smaller than the default CUDA build and
+# this server only ever does small-batch inference, not training.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir \
+    fastapi>=0.111.0 \
+    "uvicorn[standard]>=0.30.0" \
+    pydantic>=2.7.0 \
+    pandas>=2.2.0 \
+    numpy>=1.26.0 \
+    python-dotenv>=1.0.0 \
+    httpx>=0.27.0
+
+# Code + trained model + the data this server reads at inference time
+COPY mcp_servers/sensor_mcp.py ./mcp_servers/sensor_mcp.py
+COPY mcp_servers/schemas.py    ./mcp_servers/schemas.py
+COPY mcp_servers/__init__.py   ./mcp_servers/__init__.py
+COPY models/                   ./models/
+COPY data/                     ./data/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "mcp_servers.sensor_mcp:app", "--host", "0.0.0.0", "--port", "8000"]

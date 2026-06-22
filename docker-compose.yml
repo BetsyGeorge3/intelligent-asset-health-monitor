@@ -1,0 +1,112 @@
+# Runs all 5 MCP servers as separate containers with one command —
+# the containerized equivalent of `python mcp_servers/run_all.py`.
+#
+# Usage:
+#   docker compose up --build
+#   docker compose up --build -d     # detached
+#   docker compose down
+#
+# Each lightweight server (cmms, inventory, scheduling, notify) reuses
+# the SAME built image (asset-health/lightweight-mcp) but overrides
+# MCP_SERVER_MODULE per service — this is why there's one Dockerfile.lightweight
+# but four service blocks below.
+#
+# sensor-mcp uses its own heavier image since it needs torch + the model.
+#
+# Named volumes persist each server's SQLite state (and notify-mcp's
+# alert log) across `docker compose down && up`, mounted at /app/data
+# — a directory dedicated to runtime state, separate from /app/mcp_servers
+# (the application code copied in at build time). Each server's DB/log
+# path is redirected into /app/data via an env var (e.g. CMMS_DB_PATH);
+# mounting a volume directly over /app/mcp_servers would hide the code
+# that was COPY'd there during the build. Remove a volume (e.g.
+# `docker volume rm <name>`) to reset that server's state, mirroring
+# how `rm mcp_servers/*.db` works locally.
+
+services:
+  sensor-mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sensor
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s   # torch + model load takes longer than the other 4 servers
+
+  cmms-mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.lightweight
+    environment:
+      - MCP_SERVER_MODULE=mcp_servers.cmms_mcp:app
+      - CMMS_DB_PATH=/app/data/cmms.db
+    ports:
+      - "8002:8000"
+    volumes:
+      - cmms_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  inventory-mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.lightweight
+    environment:
+      - MCP_SERVER_MODULE=mcp_servers.inventory_mcp:app
+      - INVENTORY_DB_PATH=/app/data/inventory.db
+    ports:
+      - "8003:8000"
+    volumes:
+      - inventory_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  scheduling-mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.lightweight
+    environment:
+      - MCP_SERVER_MODULE=mcp_servers.scheduling_mcp:app
+      - SCHEDULING_DB_PATH=/app/data/scheduling.db
+    ports:
+      - "8004:8000"
+    volumes:
+      - scheduling_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  notify-mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.lightweight
+    environment:
+      - MCP_SERVER_MODULE=mcp_servers.notify_mcp:app
+      - NOTIFY_LOG_PATH=/app/data/alerts.log
+    ports:
+      - "8005:8000"
+    volumes:
+      - notify_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  cmms_data:
+  inventory_data:
+  scheduling_data:
+  notify_data:

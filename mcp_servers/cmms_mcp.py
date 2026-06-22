@@ -34,7 +34,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from mcp_servers.schemas import Priority, WorkOrderStatus, now_iso
 
-DB_PATH = Path(__file__).parent / "cmms.db"
+import os
+
+DB_PATH = Path(os.getenv("CMMS_DB_PATH", str(Path(__file__).parent / "cmms.db")))
 
 
 CREATE_TABLE = """

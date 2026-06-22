@@ -25,7 +25,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from mcp_servers.schemas import Priority, now_iso
 
-LOG_PATH = Path(__file__).parent / "alerts.log"
+import os
+
+LOG_PATH = Path(os.getenv("NOTIFY_LOG_PATH", str(Path(__file__).parent / "alerts.log")))
 
 app = FastAPI(title="notify-mcp", version="1.0.0")
 

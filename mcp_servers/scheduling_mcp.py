@@ -26,7 +26,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from mcp_servers.schemas import now_iso
 
-DB_PATH = Path(__file__).parent / "scheduling.db"
+import os
+
+DB_PATH = Path(os.getenv("SCHEDULING_DB_PATH", str(Path(__file__).parent / "scheduling.db")))
 
 CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS technicians (

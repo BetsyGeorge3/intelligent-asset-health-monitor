@@ -155,6 +155,68 @@ def get_anomaly_score(machine_id: str, last_n: int | None = None) -> AnomalyResu
     )
 
 
+# ---------------------------------------------------------------------------
+# Optional SageMaker-backed inference path (Phase 6)
+# ---------------------------------------------------------------------------
+#
+# get_anomaly_score() above always uses LOCAL weights from models/saved/ —
+# that behavior is unchanged and remains the default everywhere in the
+# project (sensor-mcp, the agent, the dashboard, and every existing test
+# all call get_anomaly_score() exactly as before).
+#
+# If a SageMaker endpoint has been deployed (see aws/sagemaker/deploy.py),
+# sensor_mcp.py can opt into calling it instead by setting:
+#     USE_SAGEMAKER_ENDPOINT=true
+#     SAGEMAKER_ENDPOINT_NAME=asset-health-bilstm-anomaly-detector
+# and calling get_anomaly_score_remote() instead of get_anomaly_score().
+# This is intentionally a separate function rather than a branch inside
+# get_anomaly_score() itself, so the well-tested local path can never be
+# silently altered by an environment variable someone forgot was set.
+
+def get_anomaly_score_remote(
+    machine_id: str,
+    endpoint_name: str | None = None,
+    last_n: int | None = None,
+) -> AnomalyResult:
+    """
+    Same contract as get_anomaly_score(), but runs inference via a
+    deployed SageMaker endpoint instead of local weights.
+
+    Requires `boto3` and valid AWS credentials in the environment.
+    Sensor data is still read locally (load_window) — only the model
+    forward pass happens remotely, mirroring aws/sagemaker/inference.py's
+    input_fn/predict_fn contract.
+    """
+    import os
+    import json
+    import boto3
+
+    endpoint_name = endpoint_name or os.getenv(
+        "SAGEMAKER_ENDPOINT_NAME", "asset-health-bilstm-anomaly-detector"
+    )
+
+    window = load_window(machine_id, last_n=last_n or 50)
+
+    runtime = boto3.client("sagemaker-runtime")
+    response = runtime.invoke_endpoint(
+        EndpointName=endpoint_name,
+        ContentType="application/json",
+        Body=json.dumps({"readings": window.readings}),
+    )
+    result = json.loads(response["Body"].read())
+
+    flags = _flag_elevated_sensors(window)
+
+    return AnomalyResult(
+        machine_id=machine_id,
+        score=result["anomaly_score"],
+        severity=result["severity"],
+        sensor_flags=flags,
+        latest_values=window.latest_values(),
+        window=window,
+    )
+
+
 if __name__ == "__main__":
     from data.store import get_all_machine_ids
 

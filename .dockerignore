@@ -1,0 +1,29 @@
+.git
+.gitignore
+.pytest_cache
+**/__pycache__
+*.pyc
+venv/
+.env
+
+# Exclude MCP servers' runtime-generated state (created fresh inside each
+# container on startup via lifespan handlers) — but NOT data/sensors.db,
+# which Dockerfile.sensor deliberately bakes in at build time. Scoping
+# these to mcp_servers/ specifically (rather than a bare *.db) avoids
+# accidentally excluding the one .db file the image actually needs.
+mcp_servers/*.db
+mcp_servers/*.db-wal
+mcp_servers/*.db-shm
+mcp_servers/alerts.log
+
+# SQLite WAL/SHM sidecar files for data/sensors.db — only exist while a
+# local process has the DB open. Excluding them (rather than copying
+# them in) ensures the image always gets a single consistent .db file
+# rather than a snapshot mid-write.
+data/sensors.db-wal
+data/sensors.db-shm
+
+agent/traces/
+.streamlit/
+node_modules/
+

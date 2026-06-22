@@ -28,6 +28,18 @@ agent/traces/
 # Streamlit local config (telemetry/headless settings — machine-specific)
 .streamlit/
 
+# AWS deployment build artifacts — all regenerable via the package.py /
+# package_model.py scripts; none of these should be committed since
+# they're large, environment-specific binary outputs, not source.
+aws/lambda/_build/
+aws/lambda/_staging/
+aws/lambda/package.zip
+aws/eventbridge/_build/
+aws/eventbridge/_staging/
+aws/eventbridge/orchestrator_package.zip
+aws/sagemaker/_staging/
+aws/sagemaker/model.tar.gz
+
 # Trained model weights (large binary — see README for whether to keep these)
 # Comment the next two lines out if you DO want to commit the trained model
 # models/saved/*.pt
